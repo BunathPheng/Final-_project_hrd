@@ -1,0 +1,277 @@
+"use client"
+
+import { useEffect, useState } from "react"
+import { REGEXP_ONLY_DIGITS } from "input-otp"
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
+import { Button } from "@/components/ui/button"
+import { useForm, Controller } from "react-hook-form"
+import { useRouter } from "next/navigation"
+import { verifyAction } from "@/action/auth/otp-action"
+import { toast } from "sonner"
+import { resendOtpAction } from "@/action/auth/resend-otp-action"
+import Image from "next/image"
+import loadingImage from "../../../../public/loading/loading.svg"
+
+interface OtpFormData {
+  otp: string;
+}
+
+export const OtpForm: React.FC<{ email: string, expiration: string }> = ({ email, expiration }) => {
+  const [isLoading, setIsLoading] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [remainingTime, setRemainingTime] = useState<number>(0);
+  const [lastResendTime, setLastResendTime] = useState<number>(0);
+  const [currentExpiration, setCurrentExpiration] = useState<string>(expiration);
+  
+  const RESEND_COOLDOWN = 60; // 60 seconds cooldown between resends
+  const DEFAULT_OTP_DURATION = 120; // 2 minutes default for new OTP
+  const router = useRouter();
+
+  useEffect(() => {
+    // Handle different expiration formats
+    let initialTime: number;
+
+    if (typeof currentExpiration === 'string') {
+      // Try to parse as number first
+      initialTime = parseInt(currentExpiration, 10);
+
+      // If it's still NaN, it might be a date string
+      if (isNaN(initialTime)) {
+        const expirationDate = new Date(currentExpiration);
+        const now = new Date();
+        initialTime = Math.floor((expirationDate.getTime() - now.getTime()) / 1000);
+      }
+    } else if (typeof currentExpiration === 'number') {
+      initialTime = currentExpiration;
+    } else {
+      initialTime = 0;
+    }
+
+    // Ensure we have a valid positive number
+    if (isNaN(initialTime) || initialTime < 0) {
+      initialTime = 0;
+    }
+
+    // Set initial remaining time
+    setRemainingTime(initialTime);
+
+    if (initialTime <= 0) return; // no need to start timer if already expired
+
+    const interval = setInterval(() => {
+      setRemainingTime(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [currentExpiration]); // Listen to currentExpiration changes
+
+  const formatTime = (seconds: number): string => {
+    // Handle invalid numbers
+    if (isNaN(seconds) || seconds < 0) {
+      return "0:00";
+    }
+
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
+  const {
+    control,
+    handleSubmit,
+    formState: { errors },
+    reset
+  } = useForm<OtpFormData>({
+    defaultValues: {
+      otp: "",
+    },
+  });
+
+  // Handle OTP verification
+  const handleOtp = async (data: OtpFormData) => {
+    if (!email) {
+      toast.error("Email not found. Please try again.");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const otpData = { email: email, otp: data.otp };
+      const result = await verifyAction(otpData);
+
+      if (result?.data?.status === "OK") {
+        toast.success(result?.data?.message);
+        router.push("/login");
+      } else {
+        toast.error(
+          result?.data?.errors?.message ||
+          result?.data?.errors?.detail
+        );
+        // Reset the form on error
+        reset();
+      }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (error) {
+      toast.error("Something went wrong. Please try again.");
+      reset();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle OTP resend
+  const handleResendOtp = async () => {
+    if (!email) {
+      toast.error("Email not found. Please try again.");
+      return;
+    }
+
+    setIsResending(true);
+    try {
+      const result = await resendOtpAction({ email });
+
+      if (result?.data?.status === "CREATED") {
+        setLastResendTime(Date.now()); // Set cooldown timer
+        toast.success(result?.data?.message);
+        
+        // Reset the form when new OTP is sent
+        reset();
+        
+        // Reset the timer with new expiration
+        // Check if the response contains new expiration time
+        if (result?.data?.expiration) {
+          setCurrentExpiration(result.data.expiration);
+        } else {
+          // If no expiration provided, use default duration (5 minutes)
+          setCurrentExpiration(DEFAULT_OTP_DURATION.toString());
+        }
+        
+      } else {
+        toast.error(
+          result?.data?.errors?.message ||
+          result?.data?.errors?.detail
+        );
+        // Reset the form on error
+        reset();
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Resend OTP error");
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  // Check if OTP has expired
+  const isExpired = remainingTime <= 0;
+  
+  // Check if user can resend (cooldown logic)
+  const timeSinceLastResend = Date.now() - lastResendTime;
+  const canResendDueToCooldown = timeSinceLastResend > RESEND_COOLDOWN * 1000;
+  
+  // Allow resend when expired OR when cooldown period has passed
+  const canResend = isExpired || canResendDueToCooldown;
+  
+  // Calculate remaining cooldown time
+  const cooldownRemaining = Math.max(0, RESEND_COOLDOWN - Math.floor(timeSinceLastResend / 1000));
+
+  return (
+    <form
+      onSubmit={handleSubmit(handleOtp)}
+      className="mx-auto max-w-[25rem] h-screen flex flex-col justify-center"
+    >
+      <div className="flex flex-col gap-3 justify-center items-center">
+        <h1 className="text-h4 text-center text-primary-700">
+          Enter verification code
+        </h1>
+        <p className="text-p1 text-grey-900 text-center">
+          We have sent you an email. Please check your inbox and complete the OTP verification.
+        </p>
+
+        <div className="justify-center flex">
+          <Controller
+            name="otp"
+            control={control}
+            rules={{
+              required: "OTP is required",
+              minLength: {
+                value: 6,
+                message: "Please enter a complete 6-digit OTP"
+              },
+              pattern: {
+                value: /^\d{6}$/,
+                message: "OTP must be exactly 6 digits"
+              }
+            }}
+            render={({ field }) => (
+              <InputOTP
+                value={field.value}
+                onChange={field.onChange}
+                maxLength={6}
+                pattern={REGEXP_ONLY_DIGITS}
+                autoComplete="one-time-code"
+                disabled={isExpired} // Disable input when expired
+              >
+                <InputOTPGroup>
+                  {[0, 1, 2, 3, 4, 5].map((i) => (
+                    <InputOTPSlot key={i} index={i} />
+                  ))}
+                </InputOTPGroup>
+              </InputOTP>
+            )}
+          />
+        </div>
+
+        {/* Display form validation errors */}
+        {errors.otp && (
+          <p className="text-sm text-red-500">{errors?.otp?.message}</p>
+        )}
+
+        {/* Show different messages based on expiration status */}
+        {isExpired ? (
+          <p className="text-p1 text-red-500 text-center font-medium">
+            The OTP has expired. Please request a new one.
+          </p>
+        ) : (
+          <p className="text-p1 text-grey-500 text-center">
+            The OTP will expire in <span className="text-primary-700">
+              {formatTime(remainingTime)}
+            </span> {remainingTime > 60 ? "minutes" : "seconds"}
+          </p>
+        )}
+
+        <Button
+          className="w-36"
+          type="submit"
+          disabled={isLoading || isExpired} // Disable verify button when expired
+        >
+          {isLoading ? <Image src={loadingImage} className="w-7 h-7 object-cover" alt="loading" /> : "Verify"}
+        </Button>
+
+        {/* Resend button with improved logic */}
+        <button
+          type="button"
+          onClick={handleResendOtp}
+          disabled={!canResend || isResending}
+          className={`text-p1 font-normal underline underline-offset-3 transition-colors duration-200 ${
+            !canResend || isResending
+              ? 'text-grey-400 cursor-not-allowed'
+              : 'text-grey-600 hover:text-grey-700 cursor-pointer'
+          }`}
+        >
+          {isResending ? "Resending..." : "Resend OTP"}
+        </button>
+
+        {/* Show cooldown message if applicable */}
+        {!canResend && !isExpired && cooldownRemaining > 0 && (
+          <p className="text-sm text-grey-500 text-center">
+            You can resend OTP in {cooldownRemaining} seconds
+          </p>
+        )}
+      </div>
+    </form>
+  )
+}

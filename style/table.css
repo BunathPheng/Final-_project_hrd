@@ -1,0 +1,25 @@
+table:not(.default) > thead > tr {
+    @apply bg-primary-700;
+}
+
+table:not(.default) > thead > tr th:first-child,
+table:not(.default) > tbody > tr td:first-child {
+    @apply rounded-tl-lg rounded-bl-lg;
+}
+
+table:not(.default) > thead > tr th:last-child,
+table:not(.default) > tbody > tr td:last-child {
+    @apply rounded-tr-lg rounded-br-lg;
+}
+
+table:not(.default) > thead > tr th {
+    @apply p-4 h-[46px] text-white text-base font-bold;
+}
+
+table:not(.default) > tbody > tr {
+    @apply odd:bg-slate-light even:bg-white;
+}
+
+table:not(.default) > tbody > tr td {
+    @apply p-4 h-[46px] text-black text-base;
+}
